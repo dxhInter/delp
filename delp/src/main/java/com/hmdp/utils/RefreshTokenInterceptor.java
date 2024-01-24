@@ -25,7 +25,7 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String token = request.getHeader("authorization");
         if (StrUtil.isBlank(token)) {
-            log.debug("token为空");
+//            log.debug("token为空");
             return true;
         }
         Map<Object, Object> userMap = stringRedisTemplate.opsForHash().entries(RedisConstants.LOGIN_USER_KEY + token);
