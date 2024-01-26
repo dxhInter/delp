@@ -67,6 +67,10 @@
             <artifactId>guava</artifactId>
             <version>31.0-jre</version>
         </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
