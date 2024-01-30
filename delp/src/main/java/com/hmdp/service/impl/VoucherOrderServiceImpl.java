@@ -2,6 +2,7 @@ package com.hmdp.service.impl;
 
 import com.hmdp.dto.Result;
 import com.hmdp.entity.SeckillVoucher;
+import com.hmdp.entity.User;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
@@ -12,14 +13,17 @@ import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
-import org.springframework.aop.framework.AopContext;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
+import java.util.Collections;
 
 /**
  * <p>
@@ -32,50 +36,72 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Autowired
     private ISeckillVoucherService seckillVoucherService;
-
     @Autowired
     private RedisIdWorker redisIdWorker;
-
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Autowired
+    private RedissonClient redissonClient;
+
+    public static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
 
     @Override
     public Result seckillVoucher(Long voucherId) {
-        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
-        if (voucher.getBeginTime().isAfter(LocalDateTime.now())) {
-            // 秒杀还未开始
-            return Result.fail("秒杀还未开始");
-        }
-        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
-            // 秒杀已经结束
-            return Result.fail("秒杀已经结束");
-        }
-        if (voucher.getStock() < 1) {
-            // 库存不足
-            return Result.fail("库存不足");
-        }
-        // 这里加intern是因为如果创建的String对象在常量池中已经存在，那么就直接返回常量池中的对象，不会在堆中创建新的对象, toString()默认返回String对象
-
-        //一人一单判断
-        Long userId = UserHolder.getUser().getId();
-//        synchronized (userId.toString().intern()) {
-//            // 要在事物提交后释放锁
-//            // spring事物失效问题，所以要使用代理对象，自己注入自己，获取spring代理对象，Aop
+//        SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
+//        if (voucher.getBeginTime().isAfter(LocalDateTime.now())) {
+//            // 秒杀还未开始
+//            return Result.fail("秒杀还未开始");
+//        }
+//        if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
+//            // 秒杀已经结束
+//            return Result.fail("秒杀已经结束");
+//        }
+//        if (voucher.getStock() < 1) {
+//            // 库存不足
+//            return Result.fail("库存不足");
+//        }
+//        // 这里加intern是因为如果创建的String对象在常量池中已经存在，那么就直接返回常量池中的对象，不会在堆中创建新的对象, toString()默认返回String对象
+//
+//        //一人一单判断
+//        Long userId = UserHolder.getUser().getId();
+////        synchronized (userId.toString().intern()) {
+////            // 要在事物提交后释放锁
+////            // spring事物失效问题，所以要使用代理对象，自己注入自己，获取spring代理对象，Aop
+////            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+////            return proxy.createVoucherOrder(voucherId);
+////        }
+////        SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+//        RLock lock = redissonClient.getLock("lock:order:" + userId);
+//        boolean isLock = lock.tryLock();
+//        if (!isLock) {
+//            // 获取锁失败
+//            return Result.fail("一个人只能买一单");
+//        }
+//        try {
 //            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
 //            return proxy.createVoucherOrder(voucherId);
+//        } finally {
+//            lock.unlock();
 //        }
-        SimpleRedisLock lock = new SimpleRedisLock("order" + userId, stringRedisTemplate);
-        boolean isLock = lock.tryLock(1200);
-        if (!isLock) {
-            // 获取锁失败
-            return Result.fail("一个人只能买一单");
+        Long userId = UserHolder.getUser().getId();
+        Long result = stringRedisTemplate.execute(
+                SECKILL_SCRIPT,
+                Collections.emptyList(),
+                voucherId.toString(),
+                userId.toString()
+        );
+        int r = result.intValue();
+        if (r != 0){
+            // 不为0说明没有秒杀资格
+            return Result.fail(r == 1? "库存不足" : "一个人只能买一单");
         }
-        try {
-            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-            return proxy.createVoucherOrder(voucherId);
-        } finally {
-            lock.unlock();
-        }
+        long orderId = redisIdWorker.nextId("order");
+        return Result.ok(orderId);
     }
 
     @Transactional

@@ -5,6 +5,7 @@ import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.RandomUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
@@ -20,8 +21,13 @@ import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpSession;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import com.hmdp.utils.RedisConstants;
@@ -40,6 +46,10 @@ import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private IUserService userService;
+
 
     @Override
     public Result sendCode(String phone, HttpSession session) {
@@ -77,6 +87,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         stringRedisTemplate.opsForHash().putAll(RedisConstants.LOGIN_USER_KEY+token, userMap);
         // 设置过期时间
         stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token, RedisConstants.LOGIN_USER_TTL, TimeUnit.SECONDS);
+        try {
+            testMultiLogin();
+        } catch (IOException e) {
+            log.error("创建1000个token失败", e);
+            throw new RuntimeException(e);
+        }
         return Result.ok(token);
     }
 
@@ -87,4 +103,28 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         save(user);
         return user;
     }
+
+    public void testMultiLogin() throws IOException {
+        List<User> userList = userService.lambdaQuery().last("limit 1000").list();
+        for (User user:userList){
+            String token = UUID.randomUUID().toString(true);
+            // 将user对象转换为UserDTO对象，再转换为Map
+            UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+            Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+                    CopyOptions.create().ignoreNullValue().setFieldValueEditor((fieldName,fieldValue)-> fieldValue.toString()));
+            stringRedisTemplate.opsForHash().putAll(RedisConstants.LOGIN_USER_KEY+token, userMap);
+            // 设置过期时间
+            stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token, RedisConstants.LOGIN_USER_TTL, TimeUnit.SECONDS);
+        }
+        Set<String> keys = stringRedisTemplate.keys(RedisConstants.LOGIN_USER_KEY+"*");
+        FileWriter fileWriter = new FileWriter(System.getProperty("user.dir")+"\\tokens.txt");
+        BufferedWriter bufferedWriter = new BufferedWriter(fileWriter);
+        assert keys != null;
+        for (String key:keys){
+            String token = key.substring(RedisConstants.LOGIN_USER_KEY.length());
+            bufferedWriter.write(token);
+            bufferedWriter.newLine();
+        }
+    }
+
 }
